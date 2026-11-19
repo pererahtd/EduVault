@@ -1,0 +1,18 @@
+ErrorDocument 404 /projectest/404.html
+
+RewriteEngine On
+RewriteBase /projectest/
+
+# Admin shortcut
+RewriteRule ^admin/?$ Backend/Dashboard.php [L]
+
+# 1) Browser page visit: xyz.php -> /projectest/xyz (address bar shows no ".php")
+RewriteCond %{REQUEST_METHOD} GET
+RewriteCond %{HTTP_ACCEPT} text/html [NC]
+RewriteCond %{THE_REQUEST} \s/[^\s?]*/([^\s?/]+)\.php[\s?] [NC]
+RewriteRule ^([^/]+)\.php$ /projectest/$1 [R=302,L,QSA]
+
+# 2) /projectest/xyz -> xyz.php (internal, address bar does not change)
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}.php -f
+RewriteRule ^([^/.]+)$ $1.php [L,QSA]
