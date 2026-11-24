@@ -32,31 +32,37 @@ $allMaterials = function_exists('mat_load') ? mat_load() : [];
 $userScores = [];
 $userNames = [];
 
-foreach($allMaterials as $m) {
-    if(isset($m['status']) && strtolower($m['status']) === 'approved') {
-        $uid = $m['owner'] ?? 'unknown';
-        $uname = $m['ownerName'] ?? 'Student';
+$normName   = fn(string $n): string => strtolower(trim(preg_replace('/\s+/', ' ', $n)));
+$ownerKey   = (function_exists('mat_owner_key') && $user) ? mat_owner_key($user) : '';
+$myNameKey  = $user ? $normName((string)($user['full_name'] ?? $user['name'] ?? '')) : '';
+$myGroupKey = $myNameKey !== '' ? 'name:' . $myNameKey : ($ownerKey !== '' ? 'id:' . $ownerKey : '');
 
-        if(!isset($userScores[$uid])) {
-            $userScores[$uid] = 0;
-            $userNames[$uid] = $uname;
+foreach ($allMaterials as $m) {
+    if (isset($m['status']) && strtolower((string)$m['status']) === 'approved') {
+        $uid   = (string)($m['owner'] ?? 'unknown');
+        $uname = trim((string)($m['ownerName'] ?? 'Student')) ?: 'Student';
+        $nKey  = $normName($uname);
+
+        // Merge points if the same student had a different user ID before DB backup restore
+        $groupKey = ($nKey !== '' && $nKey !== 'student') ? 'name:' . $nKey : 'id:' . $uid;
+
+        if (!isset($userScores[$groupKey])) {
+            $userScores[$groupKey] = 0;
+            $userNames[$groupKey]  = $uname;
         }
-        $userScores[$uid] += 10;
+        $userScores[$groupKey] += 10;
     }
 }
 
 arsort($userScores);
 $topUsers = array_slice($userScores, 0, 5, true);
 
-$ownerKey = (function_exists('mat_owner_key') && $user) ? mat_owner_key($user) : '';
-$myScore = $userScores[$ownerKey] ?? 0;
+$myScore = $myGroupKey !== '' ? ($userScores[$myGroupKey] ?? 0) : 0;
 
 /* ======================================================================
    NEW DASHBOARD DATA
-   Everything above this line is the original code.
    ====================================================================== */
 
-// Runs a prepared SELECT and returns all rows. Returns an empty list if it fails.
 function dash_fetch_all(mysqli $conn, string $sql, string $types, array $params): array
 {
     $stmt = $conn->prepare($sql);
@@ -77,7 +83,6 @@ function dash_fetch_all(mysqli $conn, string $sql, string $types, array $params)
     return $res ? $res->fetch_all(MYSQLI_ASSOC) : [];
 }
 
-// Greeting words use the same hour ranges as dashboard.js
 $hourNow = (int) date('G');
 if ($hourNow >= 5 && $hourNow < 12)      { $greetWord = 'Good morning'; }
 elseif ($hourNow >= 12 && $hourNow < 17) { $greetWord = 'Good afternoon'; }
@@ -116,9 +121,11 @@ if ($user) {
 
 // This student's own uploads (all statuses), newest first
 $myMaterials = [];
-if ($ownerKey !== '') {
+if ($ownerKey !== '' || $myNameKey !== '') {
     foreach ($allMaterials as $mat) {
-        if (($mat['owner'] ?? '') === $ownerKey) {
+        $matOwner = (string)($mat['owner'] ?? '');
+        $matName  = $normName((string)($mat['ownerName'] ?? ''));
+        if (($ownerKey !== '' && $matOwner === $ownerKey) || ($myNameKey !== '' && $matName === $myNameKey)) {
             $myMaterials[] = $mat;
         }
     }
@@ -153,18 +160,18 @@ $chartMax = max(10, max(array_column($chartMonths, 'points')));
 
 // Top 3 for the leaderboard, and this student's rank
 $lbTop = [];
-foreach ($topUsers as $uid => $pts) {
+foreach ($topUsers as $gKey => $pts) {
     $lbTop[] = [
-        'key'    => (string) $uid,
-        'name'   => (string) ($userNames[$uid] ?? 'Student'),
+        'key'    => (string) $gKey,
+        'name'   => (string) ($userNames[$gKey] ?? 'Student'),
         'points' => (int) $pts,
     ];
 }
 $myRank = 0;
 $pos = 0;
-foreach ($userScores as $uid => $pts) {
+foreach ($userScores as $gKey => $pts) {
     $pos++;
-    if ((string) $uid === (string) $ownerKey) {
+    if ((string) $gKey === (string) $myGroupKey) {
         $myRank = $pos;
         break;
     }
@@ -225,39 +232,34 @@ foreach ($userScores as $uid => $pts) {
             </div>
 
             <div class="top-icons">
-                <!-- Notification Bell -->
                 <div class="icon-badge" onclick="window.location.href='notice-board_forst.php'" title="Notifications">
                     <i class="far fa-bell"></i>
                     <span class="badge">3</span>
                 </div>
 
-                <!-- Messages Icon -->
                 <div class="icon-badge" onclick="window.location.href='groups.php'" title="Messages">
                     <i class="far fa-envelope"></i>
                     <span class="badge">3</span>
                 </div>
 
-                <!-- Theme Toggle -->
                 <button id="theme-toggle" class="icon-badge theme-btn" title="Toggle Dark/Light Mode">
                     <i class="fa-solid fa-moon"></i>
                 </button>
 
-                <!-- Profile Section -->
                 <div class="profile-short" onclick="window.location.href='profile.php'" title="My Profile">
             <?php
                 $isLoggedIn  = isset($user) && !empty($user);
                 $rawName     = $isLoggedIn ? trim((string)($user['full_name'] ?? '')) : '';
 
-                // If Logged out Guest, logged in name or Student
                 if (!$isLoggedIn) {
-            $firstName = 'Guest';
-            } elseif ($rawName !== '') {
-            $firstName = htmlspecialchars(first_name($rawName), ENT_QUOTES, 'UTF-8');
-            } else {
-            $firstName = 'Student';
-            }
+                    $firstName = 'Guest';
+                } elseif ($rawName !== '') {
+                    $firstName = htmlspecialchars(first_name($rawName), ENT_QUOTES, 'UTF-8');
+                } else {
+                    $firstName = 'Student';
+                }
 
-            $firstLetter = $rawName !== '' ? strtoupper(substr($rawName, 0, 1)) : ($isLoggedIn ? 'S' : 'G');
+                $firstLetter = $rawName !== '' ? strtoupper(substr($rawName, 0, 1)) : ($isLoggedIn ? 'S' : 'G');
             ?>
 
             <div class="profile-text">
@@ -409,7 +411,7 @@ foreach ($userScores as $uid => $pts) {
                     <div class="lb-place lb-<?= $place ?>">
                         <?php if ($p): ?>
                             <span class="lb-medal"><?= $medal ?></span>
-                            <span class="lb-name" title="<?= h($p['name']) ?>"><?= h($p['name']) ?><?= $p['key'] === (string) $ownerKey ? ' (You)' : '' ?></span>
+                            <span class="lb-name" title="<?= h($p['name']) ?>"><?= h($p['name']) ?><?= $p['key'] === (string) $myGroupKey ? ' (You)' : '' ?></span>
                             <span class="lb-pts"><?= (int) $p['points'] ?> pts</span>
                         <?php else: ?>
                             <span class="lb-medal">–</span>
@@ -590,38 +592,33 @@ foreach ($userScores as $uid => $pts) {
     </div>
 
     <script>
-    // Sidebar Toggle
 const menuToggle = document.getElementById('menu-toggle');
 const sidebar = document.querySelector('.sidebar');
 if (menuToggle && sidebar) {
-    menuToggle.addEventListener('click', () => sidebar.classList.toggle('collapsed')); if (!sidebar.querySelector('.drawer-close')) { const cb = document.createElement('button'); cb.type = 'button'; cb.className = 'drawer-close'; cb.setAttribute('aria-label', 'Close menu'); cb.innerHTML = '<i class="fas fa-xmark"></i>'; cb.addEventListener('click', () => sidebar.classList.remove('collapsed')); sidebar.appendChild(cb); } document.addEventListener('click', e => { if (window.innerWidth <= 992 && sidebar.classList.contains('collapsed') && !sidebar.contains(e.target) && !menuToggle.contains(e.target)) sidebar.classList.remove('collapsed'); });
+    menuToggle.addEventListener('click', () => sidebar.classList.toggle('collapsed'));
 
-// Phone drawer: visible close button, and close when tapping outside
-if (!sidebar.querySelector('.drawer-close')) {
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'drawer-close';
-    closeBtn.setAttribute('aria-label', 'Close menu');
-    closeBtn.innerHTML = '<i class="fas fa-xmark"></i>';
-    closeBtn.addEventListener('click', () => sidebar.classList.remove('collapsed'));
-    sidebar.appendChild(closeBtn);
-}
-document.addEventListener('click', e => {
-    if (window.innerWidth <= 992 && sidebar.classList.contains('collapsed')
-        && !sidebar.contains(e.target) && !menuToggle.contains(e.target)) {
-        sidebar.classList.remove('collapsed');
+    if (!sidebar.querySelector('.drawer-close')) {
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'drawer-close';
+        closeBtn.setAttribute('aria-label', 'Close menu');
+        closeBtn.innerHTML = '<i class="fas fa-xmark"></i>';
+        closeBtn.addEventListener('click', () => sidebar.classList.remove('collapsed'));
+        sidebar.appendChild(closeBtn);
     }
-}); if (!sidebar.querySelector('.drawer-close')) { const cb = document.createElement('button'); cb.type = 'button'; cb.className = 'drawer-close'; cb.setAttribute('aria-label', 'Close menu'); cb.innerHTML = '<i class="fas fa-xmark"></i>'; cb.addEventListener('click', () => sidebar.classList.remove('collapsed')); sidebar.appendChild(cb); } document.addEventListener('click', e => { if (window.innerWidth <= 992 && sidebar.classList.contains('collapsed') && !sidebar.contains(e.target) && !menuToggle.contains(e.target)) sidebar.classList.remove('collapsed'); }); if (!sidebar.querySelector('.drawer-close')) { const cb = document.createElement('button'); cb.type = 'button'; cb.className = 'drawer-close'; cb.setAttribute('aria-label', 'Close menu'); cb.innerHTML = '<i class="fas fa-xmark"></i>'; cb.addEventListener('click', () => sidebar.classList.remove('collapsed')); sidebar.appendChild(cb); } document.addEventListener('click', e => { if (window.innerWidth <= 992 && sidebar.classList.contains('collapsed') && !sidebar.contains(e.target) && !menuToggle.contains(e.target)) sidebar.classList.remove('collapsed'); });
+
+    document.addEventListener('click', e => {
+        if (window.innerWidth <= 992 && sidebar.classList.contains('collapsed')
+            && !sidebar.contains(e.target) && !menuToggle.contains(e.target)) {
+            sidebar.classList.remove('collapsed');
+        }
+    });
 }
 
-// Theme Toggle with Local Storage & System Preference
 const themeToggleBtn = document.getElementById('theme-toggle');
-
-// Check in the Local storage , or check the System is in  Dark mode or not
 const currentTheme = localStorage.getItem('eduvault_theme') ||
     (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 
-// Apply to the HTMl and Body
 document.documentElement.setAttribute('data-theme', currentTheme);
 document.body.setAttribute('data-theme', currentTheme);
 
@@ -630,20 +627,16 @@ if (themeToggleBtn) {
 
     themeToggleBtn.addEventListener('click', () => {
         const nextTheme = document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-
         document.documentElement.setAttribute('data-theme', nextTheme);
         document.body.setAttribute('data-theme', nextTheme);
-
         localStorage.setItem('eduvault_theme', nextTheme);
         themeToggleBtn.querySelector('i').className = nextTheme === 'dark' ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
     });
 }
     </script>
     <script src="dashboard.js"></script>
-    <script src="badges.js"></script>
 <?php if (isset($user) && $user): ?>
 <style>
-/* ===== EduVault AI chat widget ===== */
 #ev-chat-widget {
     position: fixed;
     right: 30px;
@@ -824,7 +817,6 @@ if (themeToggleBtn) {
         });
     }
 
-    // Escape first, then apply **bold** and line breaks (safe against HTML injection)
     function formatText(s) {
         return escapeHtml(s)
             .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -843,7 +835,6 @@ if (themeToggleBtn) {
         return win.classList.contains('show');
     }
 
-    // Keep the chat window fully inside the screen, above the bubble if possible
     function placeWindow() {
         var r = widget.getBoundingClientRect();
         var gap = 10, margin = 8;
@@ -870,7 +861,6 @@ if (themeToggleBtn) {
         }
     }
 
-    // ----- Position: move the whole widget, keep it inside the viewport -----
     function moveWidget(x, y) {
         var maxX = Math.max(0, window.innerWidth - widget.offsetWidth);
         var maxY = Math.max(0, window.innerHeight - widget.offsetHeight);
@@ -884,7 +874,7 @@ if (themeToggleBtn) {
         try {
             var r = widget.getBoundingClientRect();
             localStorage.setItem(POS_KEY, JSON.stringify({ x: r.left, y: r.top }));
-        } catch (e) { /* storage blocked: ignore */ }
+        } catch (e) {}
     }
 
     function restorePosition() {
@@ -893,10 +883,9 @@ if (themeToggleBtn) {
             if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
                 moveWidget(saved.x, saved.y);
             }
-        } catch (e) { /* storage blocked or bad data: use default position */ }
+        } catch (e) {}
     }
 
-    // ----- Drag (mouse + touch) vs click -----
     bubble.addEventListener('pointerdown', function (e) {
         if (e.button > 0) return;
         var r = widget.getBoundingClientRect();
@@ -909,7 +898,7 @@ if (themeToggleBtn) {
         if (!dragState) return;
         var dx = e.clientX - dragState.startX;
         var dy = e.clientY - dragState.startY;
-        if (!dragMoved && Math.abs(dx) + Math.abs(dy) < 5) return; // small movement = click
+        if (!dragMoved && Math.abs(dx) + Math.abs(dy) < 5) return;
         dragMoved = true;
         bubble.classList.add('dragging');
         moveWidget(dragState.origX + dx, dragState.origY + dy);
@@ -935,7 +924,6 @@ if (themeToggleBtn) {
         bubble.classList.remove('dragging');
     });
 
-    // Keyboard support for the bubble
     bubble.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -947,7 +935,6 @@ if (themeToggleBtn) {
         openChat(false);
     });
 
-    // ----- Sending messages -----
     async function sendMessage() {
         var text = input.value.trim();
         if (!text || busy) return;
@@ -1002,7 +989,6 @@ if (themeToggleBtn) {
     });
     sendBtn.addEventListener('click', sendMessage);
 
-    // ----- Keep position valid when the window size changes -----
     window.addEventListener('resize', function () {
         var r = widget.getBoundingClientRect();
         moveWidget(r.left, r.top);
