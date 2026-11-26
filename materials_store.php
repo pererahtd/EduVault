@@ -3,37 +3,49 @@
  * EduVault study-material storage (shared by the student pages and the Backend).
  * PDFs + materials.json live in /material_data (blocked from the web by .htaccess).
  */
-if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'materials_store.php') { http_response_code(403); exit; }
+if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'materials_store.php') {
+    http_response_code(403);
+    exit;
+}
 
-const EV_MAT_DIR       = __DIR__ . '/material_data';
-const EV_MAT_DB        = EV_MAT_DIR . '/materials.json';
-const EV_MAT_MAX_BYTES = 10 * 1024 * 1024;   // 10 MB per PDF
+const EV_MAT_DIR                  = __DIR__ . '/material_data';
+const EV_MAT_DB                   = EV_MAT_DIR . '/materials.json';
+const EV_MAT_MAX_BYTES            = 10 * 1024 * 1024;   // 10 MB per PDF
 const EV_MAT_MAX_PENDING_PER_USER = 25;
 
 const EV_MAT_ROLE_KEYS   = ['role', 'user_role', 'usertype', 'user_type', 'type'];
 const EV_MAT_ADMIN_ROLES = ['admin', 'administrator'];
 
 function mat_boot(): void {
-    if (session_status() !== PHP_SESSION_ACTIVE) session_start();
-    if (!is_dir(EV_MAT_DIR)) @mkdir(EV_MAT_DIR, 0755, true);
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start();
+    }
+    if (!is_dir(EV_MAT_DIR)) {
+        @mkdir(EV_MAT_DIR, 0755, true);
+    }
     $ht = EV_MAT_DIR . '/.htaccess';
     if (!is_file($ht)) {
-        @file_put_contents($ht,
+        @file_put_contents(
+            $ht,
             "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n" .
-            "<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n");
+            "<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n"
+        );
     }
 }
 
 function mat_json(array $data, int $code = 200): void {
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
 function mat_csrf(): string {
-    if (empty($_SESSION['mat_csrf'])) $_SESSION['mat_csrf'] = bin2hex(random_bytes(16));
+    if (empty($_SESSION['mat_csrf'])) {
+        $_SESSION['mat_csrf'] = bin2hex(random_bytes(16));
+    }
     return $_SESSION['mat_csrf'];
 }
 
@@ -56,7 +68,9 @@ function mat_is_admin(): bool {
 
 function mat_owner_key(array $user): string {
     foreach (['id', 'user_id', 'student_id', 'email', 'username', 'full_name'] as $k) {
-        if (!empty($user[$k])) return (string)$user[$k];
+        if (!empty($user[$k])) {
+            return (string)$user[$k];
+        }
     }
     return '';
 }
@@ -67,10 +81,15 @@ function mat_clean(string $s, int $max): string {
     return function_exists('mb_substr') ? mb_substr($s, 0, $max) : substr($s, 0, $max);
 }
 
-function mat_valid_id(string $id): bool { return (bool)preg_match('/^[a-f0-9]{32}$/', $id); }
+function mat_valid_id(string $id): bool {
+    return (bool)preg_match('/^[a-f0-9]{32}$/', $id);
+}
 
 function mat_load(): array {
-    if (!is_file(EV_MAT_DB)) return [];
+    clearstatcache(true, EV_MAT_DB);
+    if (!is_file(EV_MAT_DB)) {
+        return [];
+    }
     $d = json_decode((string)@file_get_contents(EV_MAT_DB), true);
     return is_array($d) ? $d : [];
 }
@@ -78,14 +97,17 @@ function mat_load(): array {
 function mat_mutate(callable $fn) {
     mat_boot();
     $lock = fopen(EV_MAT_DIR . '/.lock', 'c');
-    if (!$lock) throw new RuntimeException('Storage unavailable');
+    if (!$lock) {
+        throw new RuntimeException('Storage unavailable');
+    }
     flock($lock, LOCK_EX);
     try {
         $items  = mat_load();
         $result = $fn($items);
-        $tmp = EV_MAT_DB . '.tmp';
+        $tmp    = EV_MAT_DB . '.tmp';
         file_put_contents($tmp, json_encode(array_values($items), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         rename($tmp, EV_MAT_DB);
+        clearstatcache(true, EV_MAT_DB);
         return $result;
     } finally {
         flock($lock, LOCK_UN);
@@ -95,7 +117,9 @@ function mat_mutate(callable $fn) {
 
 function mat_delete_file(array $m): void {
     $f = EV_MAT_DIR . '/' . basename((string)($m['file'] ?? ''));
-    if (is_file($f)) @unlink($f);
+    if (is_file($f)) {
+        @unlink($f);
+    }
 }
 
 /**
