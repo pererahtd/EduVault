@@ -1,28 +1,10 @@
 <?php
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 date_default_timezone_set('Asia/Colombo'); // Sri Lanka time for dates and countdowns
 require_once 'bootstrap_2.php';
 require_once 'materials_store.php';
 require_once __DIR__ . '/db.php';
-
-// Fetch Upcoming Events from Database
-$upcomingEvents = [];
-$eventQuery = "SELECT * FROM events WHERE event_date >= CURDATE() ORDER BY event_date ASC LIMIT 5";
-$result = $conn->query($eventQuery);
-if ($result) {
-    while ($row = $result->fetch_assoc()) {
-        $upcomingEvents[] = $row;
-    }
-}
-
-// Fetch Announcements from Database
-$announcementsList = [];
-$annQuery = "SELECT * FROM announcements ORDER BY publish_date DESC LIMIT 5";
-$annResult = $conn->query($annQuery);
-if ($annResult) {
-    while ($row = $annResult->fetch_assoc()) {
-        $announcementsList[] = $row;
-    }
-}
 
 $user = current_user();
 $loggedInUser = $user ? first_name($user['full_name']) : 'Guest';
@@ -56,12 +38,81 @@ foreach ($allMaterials as $m) {
 
 arsort($userScores);
 $topUsers = array_slice($userScores, 0, 5, true);
+$myScore  = $myGroupKey !== '' ? ($userScores[$myGroupKey] ?? 0) : 0;
 
-$myScore = $myGroupKey !== '' ? ($userScores[$myGroupKey] ?? 0) : 0;
+// This student's own uploads (all statuses), newest first
+$myMaterials = [];
+if ($ownerKey !== '' || $myNameKey !== '') {
+    foreach ($allMaterials as $mat) {
+        $matOwner = (string)($mat['owner'] ?? '');
+        $matName  = $normName((string)($mat['ownerName'] ?? ''));
+        if (($ownerKey !== '' && $matOwner === $ownerKey) || ($myNameKey !== '' && $matName === $myNameKey)) {
+            $myMaterials[] = $mat;
+        }
+    }
+    usort($myMaterials, fn($a, $b) => ($b['created'] ?? 0) <=> ($a['created'] ?? 0));
+}
 
-/* ======================================================================
-   NEW DASHBOARD DATA
-   ====================================================================== */
+$myCounts = ['approved' => 0, 'pending' => 0, 'rejected' => 0];
+foreach ($myMaterials as $mat) {
+    $st = strtolower((string) ($mat['status'] ?? 'pending'));
+    if (isset($myCounts[$st])) {
+        $myCounts[$st]++;
+    }
+}
+
+// Top 3 for the leaderboard, and this student's rank
+$lbTop = [];
+foreach ($topUsers as $gKey => $pts) {
+    $lbTop[] = [
+        'key'    => (string) $gKey,
+        'name'   => (string) ($userNames[$gKey] ?? 'Student'),
+        'points' => (int) $pts,
+    ];
+}
+$myRank = 0;
+$pos = 0;
+foreach ($userScores as $gKey => $pts) {
+    $pos++;
+    if ((string) $gKey === (string) $myGroupKey) {
+        $myRank = $pos;
+        break;
+    }
+}
+
+// Live JSON endpoint for real-time leaderboard updates
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'leaderboard') {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'ok'         => true,
+        'top'        => array_slice($lbTop, 0, 3),
+        'myGroupKey' => $myGroupKey,
+        'myRank'     => $myRank,
+        'myScore'    => (int) $myScore,
+        'counts'     => $myCounts,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// Fetch Upcoming Events from Database
+$upcomingEvents = [];
+$eventQuery = "SELECT * FROM events WHERE event_date >= CURDATE() ORDER BY event_date ASC LIMIT 5";
+$result = $conn->query($eventQuery);
+if ($result) {
+    while ($row = $result->fetch_assoc()) {
+        $upcomingEvents[] = $row;
+    }
+}
+
+// Fetch Announcements from Database
+$announcementsList = [];
+$annQuery = "SELECT * FROM announcements ORDER BY publish_date DESC LIMIT 5";
+$annResult = $conn->query($annQuery);
+if ($annResult) {
+    while ($row = $annResult->fetch_assoc()) {
+        $announcementsList[] = $row;
+    }
+}
 
 function dash_fetch_all(mysqli $conn, string $sql, string $types, array $params): array
 {
@@ -119,27 +170,6 @@ if ($user) {
     );
 }
 
-// This student's own uploads (all statuses), newest first
-$myMaterials = [];
-if ($ownerKey !== '' || $myNameKey !== '') {
-    foreach ($allMaterials as $mat) {
-        $matOwner = (string)($mat['owner'] ?? '');
-        $matName  = $normName((string)($mat['ownerName'] ?? ''));
-        if (($ownerKey !== '' && $matOwner === $ownerKey) || ($myNameKey !== '' && $matName === $myNameKey)) {
-            $myMaterials[] = $mat;
-        }
-    }
-    usort($myMaterials, fn($a, $b) => ($b['created'] ?? 0) <=> ($a['created'] ?? 0));
-}
-
-$myCounts = ['approved' => 0, 'pending' => 0, 'rejected' => 0];
-foreach ($myMaterials as $mat) {
-    $st = strtolower((string) ($mat['status'] ?? 'pending'));
-    if (isset($myCounts[$st])) {
-        $myCounts[$st]++;
-    }
-}
-
 // Points per month for the last 6 months (1 approved PDF = 10 points)
 $chartMonths = [];
 for ($i = 5; $i >= 0; $i--) {
@@ -157,25 +187,6 @@ foreach ($myMaterials as $mat) {
     }
 }
 $chartMax = max(10, max(array_column($chartMonths, 'points')));
-
-// Top 3 for the leaderboard, and this student's rank
-$lbTop = [];
-foreach ($topUsers as $gKey => $pts) {
-    $lbTop[] = [
-        'key'    => (string) $gKey,
-        'name'   => (string) ($userNames[$gKey] ?? 'Student'),
-        'points' => (int) $pts,
-    ];
-}
-$myRank = 0;
-$pos = 0;
-foreach ($userScores as $gKey => $pts) {
-    $pos++;
-    if ((string) $gKey === (string) $myGroupKey) {
-        $myRank = $pos;
-        break;
-    }
-}
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -365,9 +376,9 @@ foreach ($userScores as $gKey => $pts) {
                 <div class="dash-card-head">
                     <h3><i class="fas fa-file-alt"></i> Your Shared Resource</h3>
                 </div>
-                <div class="sr-row sr-approved"><span>Approved</span><strong><?= (int) $myCounts['approved'] ?></strong></div>
-                <div class="sr-row sr-pending"><span>Pending</span><strong><?= (int) $myCounts['pending'] ?></strong></div>
-                <div class="sr-row sr-rejected"><span>Rejected</span><strong><?= (int) $myCounts['rejected'] ?></strong></div>
+                <div class="sr-row sr-approved"><span>Approved</span><strong id="srApproved"><?= (int) $myCounts['approved'] ?></strong></div>
+                <div class="sr-row sr-pending"><span>Pending</span><strong id="srPending"><?= (int) $myCounts['pending'] ?></strong></div>
+                <div class="sr-row sr-rejected"><span>Rejected</span><strong id="srRejected"><?= (int) $myCounts['rejected'] ?></strong></div>
                 <span class="dash-muted">Tap to see all</span>
             </div>
 
@@ -400,7 +411,7 @@ foreach ($userScores as $gKey => $pts) {
                     <span class="dash-muted">Top students by points</span>
                 </div>
 
-                <div class="lb-podium">
+                <div class="lb-podium" id="lbPodium">
                 <?php
                 // Visual order: 2nd, 1st, 3rd
                 foreach ([1, 0, 2] as $idx):
@@ -423,7 +434,7 @@ foreach ($userScores as $gKey => $pts) {
                 <?php endforeach; ?>
                 </div>
 
-                <div class="lb-you">
+                <div class="lb-you" id="lbYou">
                     <?php if ($myRank > 0): ?>
                         You are <strong>#<?= $myRank ?></strong> with <?= (int) $myScore ?> points
                     <?php else: ?>
@@ -437,7 +448,7 @@ foreach ($userScores as $gKey => $pts) {
                     <h3><i class="fas fa-chart-column"></i> Your score</h3>
                     <span class="dash-muted">Last 6 months</span>
                 </div>
-                <div class="ys-total"><?= (int) $myScore ?> <small>points</small></div>
+                <div class="ys-total" id="ysTotal"><?= (int) $myScore ?> <small>points</small></div>
                 <div class="ys-chart">
                     <?php foreach ($chartMonths as $cm):
                         $barPx = $cm['points'] > 0 ? max(6, (int) round($cm['points'] / $chartMax * 96)) : 4; ?>
@@ -633,6 +644,74 @@ if (themeToggleBtn) {
         themeToggleBtn.querySelector('i').className = nextTheme === 'dark' ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
     });
 }
+
+// Auto-refresh Leaderboard & Points every 5 seconds
+(function () {
+    function esc(str) {
+        return String(str).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    async function refreshLeaderboard() {
+        try {
+            const res = await fetch('index.php?ajax=leaderboard&_=' + Date.now(), { cache: 'no-store' });
+            const data = await res.json();
+            if (!data || !data.ok) return;
+
+            const podium = document.getElementById('lbPodium');
+            const lbYou  = document.getElementById('lbYou');
+            const ysTot  = document.getElementById('ysTotal');
+
+            if (podium && Array.isArray(data.top)) {
+                const medals = ['🥇', '🥈', '🥉'];
+                podium.innerHTML = [1, 0, 2].map(idx => {
+                    const p = data.top[idx] || null;
+                    const place = idx + 1;
+                    if (p) {
+                        const youTag = (p.key === data.myGroupKey) ? ' (You)' : '';
+                        return `<div class="lb-place lb-${place}">
+                            <span class="lb-medal">${medals[idx]}</span>
+                            <span class="lb-name" title="${esc(p.name)}">${esc(p.name)}${youTag}</span>
+                            <span class="lb-pts">${Number(p.points)} pts</span>
+                            <div class="lb-block">${place}</div>
+                        </div>`;
+                    }
+                    return `<div class="lb-place lb-${place}">
+                        <span class="lb-medal">–</span>
+                        <span class="lb-name lb-empty">No one yet</span>
+                        <span class="lb-pts">&nbsp;</span>
+                        <div class="lb-block">${place}</div>
+                    </div>`;
+                }).join('');
+            }
+
+            if (lbYou) {
+                lbYou.innerHTML = data.myRank > 0
+                    ? `You are <strong>#${Number(data.myRank)}</strong> with ${Number(data.myScore)} points`
+                    : `Get a PDF approved to earn points and appear here`;
+            }
+
+            if (ysTot) {
+                ysTot.innerHTML = `${Number(data.myScore)} <small>points</small>`;
+            }
+
+            if (data.counts) {
+                const appEl = document.getElementById('srApproved');
+                const penEl = document.getElementById('srPending');
+                const rejEl = document.getElementById('srRejected');
+                if (appEl) appEl.textContent = Number(data.counts.approved || 0);
+                if (penEl) penEl.textContent = Number(data.counts.pending || 0);
+                if (rejEl) rejEl.textContent = Number(data.counts.rejected || 0);
+            }
+        } catch (e) {}
+    }
+
+    setInterval(refreshLeaderboard, 5000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshLeaderboard();
+    });
+})();
     </script>
     <script src="dashboard.js"></script>
 <?php if (isset($user) && $user): ?>
